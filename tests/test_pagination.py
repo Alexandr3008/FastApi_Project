@@ -4,34 +4,37 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_pagination_and_search(client):
-    await client.post("/auth/register", json={"email": "p@e.com", "password": "pwd123"})
+async def test_pagination_and_search(client_auth):
+    # Регистрировать и логиниться не нужно, client_auth уже с кукой
+
     # Создаём категорию
-    resp_cat = await client.post("/categories", json={"name": "BlogCat"})
+    resp_cat = await client_auth.post("/categories", json={"name": "BlogCat"})
+    assert resp_cat.status_code == 201, f"Create category failed: {resp_cat.status_code}, {resp_cat.text}"
     cat_id = resp_cat.json()["id"]
 
     # Создаём 25 статей
     for i in range(25):
-        await client.post(
+        res = await client_auth.post(
             "/articles",
-            data={
-                "title": f"Article {i}",
-                "content": f"Содержимое {i}",
-                "category_id": str(cat_id)
+            files={
+                "title": (None, f"Article {i}"),
+                "content": (None, f"Content {i}"),
+                "category_id": (None, str(cat_id))
             }
         )
+        assert res.status_code == 201, f"Create article failed: {res.status_code}, {res.text}"
 
-    # Paginate: page_size=10, page_number=2 → статьи 10..19
-    response = await client.get("/articles?page_number=2&page_size=10")
-    assert response.status_code == 200
+    # Проверяем пагинацию: page_number=2, page_size=10 → должны быть статьи 10..19
+    response = await client_auth.get("/articles?page_number=2&page_size=10")
+    assert response.status_code == 200, f"Pagination failed: {response.status_code}, {response.text}"
     data = response.json()
     assert data["meta"]["total_items"] == 25
     assert data["meta"]["total_pages"] == 3
     assert data["meta"]["page_number"] == 2
     assert len(data["items"]) == 10
 
-    # Поиск по «Article 1» вернёт хотя бы одну статью
-    response2 = await client.get("/articles?search=Article 1")
-    assert response2.status_code == 200
+    # Проверяем поиск: «Article 1» должно вернуть хотя бы одну статью
+    response2 = await client_auth.get("/articles?search=Article 1")
+    assert response2.status_code == 200, f"Search failed: {response2.status_code}, {response2.text}"
     data2 = response2.json()
     assert data2["meta"]["total_items"] >= 1

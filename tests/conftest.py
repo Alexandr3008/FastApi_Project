@@ -11,95 +11,84 @@ from httpx._transports.asgi import ASGITransport
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from alembic import command
-from alembic.config import Config as AlembicConfig
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from src.core.security import create_access_token, hash_password
-from src.db.base import Base
+from src.core.security import hash_password
 from src.db.models.user import User
 from src.db.session import get_async_session
 from src.main import app
 from tests.test_config import test_settings
 
-# ========== DB SETUP ==========
-
 DATABASE_URL = test_settings.DB_URL
-engine_test = create_async_engine(DATABASE_URL, echo=False)
-AsyncSessionTestLocal = async_sessionmaker(engine_test, expire_on_commit=False)
+engine_test = create_async_engine(DATABASE_URL, echo=False, future=True)
+TestSessionLocal = async_sessionmaker(bind=engine_test, expire_on_commit=False)
 
+CLEAN_TABLES = ["article", "user", "category"]
 
+@pytest.fixture(scope="session")
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
 
-@pytest_asyncio.fixture(scope="function")
-async def session():
-    async with AsyncSessionTestLocal() as session:
-        yield session
+@pytest.fixture(scope="session")
+async def async_session_test():
+    engine = create_async_engine(DATABASE_URL, future=True, echo=True)
+    async_session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    yield async_session
 
+@pytest.fixture(scope="function", autouse=True)
+async def clean_tables(async_session_test):
+    """Clean data in all tables before running test function"""
+    async with async_session_test() as session:
+        async with session.begin():
+            for table_for_cleaning in CLEAN_TABLES:
+                await session.execute(text(f"""TRUNCATE TABLE {table_for_cleaning} RESTART IDENTITY CASCADE;"""))
 
-# ========== CLIENT FIXTURES ==========
+@pytest_asyncio.fixture
+async def session() -> AsyncSession:
+    async with TestSessionLocal() as test_session:
+        yield test_session
 
-@pytest_asyncio.fixture()
-async def client(session: AsyncSession):
+@pytest_asyncio.fixture
+async def client():
     """
-    FastAPI test client with overridden DB session.
+    Каждый запрос в тестах будет использовать новую сессию.
     """
     async def override_get_session():
-        yield session
+        async with TestSessionLocal() as session:
+            yield session
 
     app.dependency_overrides[get_async_session] = override_get_session
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test"
-    ) as ac:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
-
-@pytest_asyncio.fixture()
-async def client_auth(client, create_user):
-    """
-    Authenticated client with Bearer token from freshly created user.
-    """
-    user = await create_user("test@example.com", "string")
-    token = create_access_token(str(user.id))
-    client.headers.update({"Authorization": f"Bearer {token}"})
-    return client
-
-
-# ========== UTILITY FIXTURES ==========
-@pytest_asyncio.fixture
-async def test_user():
-    async with engine_test.connect() as conn:
-        await conn.execute(
-            text("INSERT INTO users (email, hashed_password, is_active) VALUES (:email, :password, :is_active)"),
-            {"email": "test@example.com", "password": "hashed_password", "is_active": True}
-        )
-        await conn.commit()
-    yield
-    async with engine_test.connect() as conn:
-        await conn.execute(text("DELETE FROM users WHERE email = :email"), {"email": "test@example.com"})
-        await conn.commit()
-
+    app.dependency_overrides.pop(get_async_session, None)
 
 @pytest_asyncio.fixture
 async def create_user(session: AsyncSession):
     async def _create_user(email: str, password: str):
-        user = User(
-            email=email,
-            hashed_password=hash_password(password),
-            is_active=True
-        )
+        user = User(email=email, hashed_password=hash_password(password), is_active=True)
         session.add(user)
         await session.commit()
         await session.refresh(user)
         return user
     return _create_user
 
+@pytest_asyncio.fixture
+async def get_token(client):
+    """
+    Регистрирует и логинит, возвращает токен (из body, не куки).
+    """
+    async def _get_token(email="default@example.com", password="password123"):
+        await client.post("/auth/register", json={"email": email, "password": password})
+        response = await client.post("/auth/login", json={"email": email, "password": password})
+        data = response.json()
+        return data["access_token"]
+    return _get_token
 
 @pytest_asyncio.fixture
-async def get_token(create_user):
-    async def _get_token(email: str = "test@example.com", password: str = "string"):
-        user = await create_user(email, password)
-        return create_access_token(str(user.id))
-    return _get_token
+async def client_auth(client, get_token):
+    token = await get_token()
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    return client

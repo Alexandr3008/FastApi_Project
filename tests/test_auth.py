@@ -1,47 +1,46 @@
 from __future__ import annotations
 
 import pytest
-from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
 class TestAuth:
-    async def test_register_success(self, client: AsyncClient):
-        response = await client.post("/auth/register", json={
-            "email": "testuser@example.com",
-            "password": "strongpassword"
-        })
-        assert response.status_code == 201
-        assert "access_token" in response.json()
+    async def test_register_success(self, client):
+        res = await client.post("/auth/register", json={"email": "testuser@example.com", "password": "strongpassword"})
+        assert res.status_code == 201, f"Unexpected status: {res.status_code}, response: {res.text}"
+        data = res.json()
+        assert "access_token" in data
 
-    async def test_register_duplicate_email(self, client: AsyncClient):
-        await client.post("/auth/register", json={
-            "email": "dupe@example.com",
-            "password": "password"
-        })
-        response = await client.post("/auth/register", json={
-            "email": "dupe@example.com",
-            "password": "password"
-        })
-        assert response.status_code == 400
-        assert response.json()["detail"] == "Пользователь уже существует"
+    async def test_register_duplicate_email(self, client):
+        payload = {"email": "dupe@example.com", "password": "password"}
+        first = await client.post("/auth/register", json=payload)
+        assert first.status_code == 201
 
-    async def test_login_success(self, client: AsyncClient):
+        second = await client.post("/auth/register", json=payload)
+        assert second.status_code == 400
+        assert second.json()["detail"] == "Пользователь уже существует"
+
+    async def test_login_success(self, client):
         email = "loginuser@example.com"
         password = "mypassword"
         await client.post("/auth/register", json={"email": email, "password": password})
-        response = await client.post("/auth/login", json={"email": email, "password": password})
-        assert response.status_code == 200
-        assert "access_token" in response.json()
 
-    async def test_login_wrong_password(self, client: AsyncClient):
+        res = await client.post("/auth/login", json={"email": email, "password": password})
+        assert res.status_code == 200, f"Unexpected status: {res.status_code}, response: {res.text}"
+        data = res.json()
+        assert "access_token" in data
+
+    async def test_login_wrong_password(self, client):
         email = "wrongpass@example.com"
-        await client.post("/auth/register", json={"email": email, "password": "correctpass"})
-        response = await client.post("/auth/login", json={"email": email, "password": "wrongpass"})
-        assert response.status_code == 401
-        assert response.json()["detail"] == "Неверный email или пароль"
+        correct = "correctpass"
+        wrong = "wrongpass"
+        await client.post("/auth/register", json={"email": email, "password": correct})
 
-    async def test_login_unknown_user(self, client: AsyncClient):
-        response = await client.post("/auth/login", json={"email": "nonexistent@example.com", "password": "any"})
-        assert response.status_code == 401
-        assert response.json()["detail"] == "Неверный email или пароль"
+        res = await client.post("/auth/login", json={"email": email, "password": wrong})
+        assert res.status_code == 401
+        assert res.json()["detail"] == "Неверный email или пароль"
+
+    async def test_login_unknown_user(self, client):
+        res = await client.post("/auth/login", json={"email": "nonexistent@example.com", "password": "anypass"})
+        assert res.status_code == 401
+        assert res.json()["detail"] == "Неверный email или пароль"

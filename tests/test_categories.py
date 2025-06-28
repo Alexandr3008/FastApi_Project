@@ -1,29 +1,22 @@
 from __future__ import annotations
 
-import io
-
 import pytest
-from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_create_category_duplicate(client, get_token):
-    token = await get_token("user3@example.com", "123456")
-    headers = {"Cookie": f"access_token=Bearer {token}"}
+async def test_create_category_duplicate(client_auth):
+    # Первая попытка
+    res = await client_auth.post("/categories/", json={"name": "Health"})
+    assert res.status_code == 201, f"Unexpected status: {res.status_code}, response: {res.text}"
 
-    res = await client.post("/categories/", json={"name": "Health"}, headers=headers)
-    assert res.status_code == 201
-
-    # Try duplicate
-    res = await client.post("/categories/", json={"name": "Health"}, headers=headers)
-    assert res.status_code == 400
+    # Вторая с тем же именем
+    res = await client_auth.post("/categories/", json={"name": "Health"})
+    assert res.status_code == 400, f"Unexpected status: {res.status_code}, response: {res.text}"
     assert res.json()["detail"] == "Category with this name already exists"
 
-
 @pytest.mark.asyncio
-async def test_list_categories(client, get_token):
-    token = await get_token("user4@example.com", "123"),
-    headers = {"Cookie": f"access_token=Bearer {token[0]}"}
-    res = await client.get("/categories/", headers=headers)
-    assert res.status_code == 200
-    assert isinstance(res.json(), list)
+async def test_list_categories(client_auth):
+    res = await client_auth.get("/categories/")
+    assert res.status_code == 200, f"Unexpected status: {res.status_code}, response: {res.text}"
+    data = res.json()
+    assert isinstance(data, list), f"Expected list, got: {type(data)}"

@@ -7,13 +7,15 @@ readme = "README.md"
 packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
+bcrypt = "<4.1"
 python = ">=3.12"
 fastapi = "^0.115.12"
 uvicorn = {extras = ["standard"], version = "^0.34.2"}
 sqlalchemy = {extras = ["asyncio"], version = "^2.0.41"}
 asyncpg = "^0.30.0"
-pydantic = "^2.11.5"
-python-jose = {extras = ["cryptography"], version = "^3.4.0"}
+pydantic = {extras = ["email"], version = "^2.11.5"}
+python-multipart = "^0.0.12"
+python-jose = {extras = ["cryptography"], version = "^3.5.0"}
 passlib = {extras = ["bcrypt"], version = "^1.7.4"}
 python-dotenv = "^1.1.0"
 aiobotocore = {extras = ["awscli"], version = "^2.22.0"}
@@ -22,10 +24,10 @@ kombu = "^5.5.3"
 aiofiles = "^24.1.0"
 psycopg = {extras = ["binary"], version = "^3.2.9"}
 alembic = "^1.16.1"
-pytest = "^8.3.5"
 pydantic-settings = "^2.9.1"
 
 [tool.poetry.group.dev.dependencies]
+pytest = "^8.3.5"
 pytest-asyncio = "^1.0.0"
 pytest-cov = "^6.1.1"
 ruff = "^0.11.11"

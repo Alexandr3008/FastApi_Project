@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 
@@ -26,7 +27,7 @@ def setup_logging():
     logger.addHandler(console_handler)
 
     # Файловый обработчик (с ротацией по дням)
-    file_handler = logging.handlers.TimedRotatingFileHandler(
+    file_handler = TimedRotatingFileHandler(
         filename=log_dir / "blog_api.log",
         when="midnight",
         interval=1,

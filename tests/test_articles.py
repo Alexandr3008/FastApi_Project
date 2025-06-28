@@ -1,60 +1,44 @@
 from __future__ import annotations
 
-import io
-
 import pytest
-from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_create_article_success(client, get_token, session):
-    token = await get_token("user1@example.com", "password123")
-    headers = {"Authorization": f"Bearer {token}"}
-    response = await client.post("/articles", json={"title": "Test"}, headers=headers)
-    assert response.status_code == 200
-    # create category
-    res = await client.post("/categories/", json={"name": "Tech"}, headers=headers)
-    assert res.status_code == 201
+async def test_create_article_success(client_auth):
+    # Сначала создаём категорию
+    res = await client_auth.post("/categories/", json={"name": "Tech"})
+    assert res.status_code == 201, f"Unexpected status: {res.status_code}, response: {res.text}"
     category_id = res.json()["id"]
 
-    # create article
-    res = await client.post(
+    # Создаём статью
+    res = await client_auth.post(
         "/articles/",
-        headers=headers,
         files={
             "title": (None, "Test Article"),
             "content": (None, "Test content"),
             "category_id": (None, str(category_id)),
         },
     )
-    assert res.status_code == 201
+    assert res.status_code == 201, f"Unexpected status: {res.status_code}, response: {res.text}"
     data = res.json()
     assert data["title"] == "Test Article"
     assert data["content"] == "Test content"
     assert data["category_id"] == category_id
 
-
 @pytest.mark.asyncio
-async def test_create_article_invalid_category(client, get_token):
-    token = await get_token("user2@example.com", "pass")
-    headers = {"Cookie": f"access_token=Bearer {token}"}
-
-    res = await client.post(
+async def test_create_article_invalid_category(client_auth):
+    res = await client_auth.post(
         "/articles/",
-        headers=headers,
         files={
             "title": (None, "Broken"),
             "content": (None, "Test"),
-            "category_id": (None, "9999"),  # invalid
+            "category_id": (None, "9999"),  # несуществующая категория
         },
     )
-    assert res.status_code == 400
+    assert res.status_code == 400, f"Unexpected status: {res.status_code}, response: {res.text}"
     assert res.json()["detail"] == "Category not found"
 
-
 @pytest.mark.asyncio
-async def test_list_articles_unauthorized():
-    from src.main import app
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        res = await client.get("/articles/")
-        assert res.status_code == 401
+async def test_list_articles_unauthorized(client):
+    res = await client.get("/articles/")
+    assert res.status_code == 401, f"Unexpected status: {res.status_code}, response: {res.text}"
