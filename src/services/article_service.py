@@ -137,3 +137,23 @@ class ArticleService:
             logger.error(f"Unexpected error in delete_article: {e!s}")
             await db.rollback()
             raise
+
+    @staticmethod
+    async def list_deleted_articles(db: AsyncSession, user_id: int):
+        result = await db.execute(
+            select(Article).where(Article.author_id == user_id, Article.is_deleted == True)
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def restore_article(db: AsyncSession, article_id: int, user_id: int):
+        result = await db.execute(
+            select(Article).where(Article.id == article_id, Article.author_id == user_id, Article.is_deleted == True)
+        )
+        article = result.scalar_one_or_none()
+        if not article:
+            return None
+        article.is_deleted = False
+        await db.commit()
+        await db.refresh(article)
+        return article

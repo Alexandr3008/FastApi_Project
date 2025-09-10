@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from fastapi import (
@@ -22,7 +21,7 @@ from src.core.logging_config import logger
 from src.db.models.category import Category
 from src.db.models.user import User
 from src.db.session import get_async_session
-from src.schemas.article import ArticleCreate, ArticleRead, ArticleUpdate
+from src.schemas.article import ArticleCreate, ArticleRead
 from src.schemas.pagination import Page
 from src.services.article_service import ArticleService
 from src.utils.s3 import delete_image, get_image_url, upload_image
@@ -34,18 +33,58 @@ router = APIRouter(
 )
 
 
-@router.post("/", response_model=ArticleRead, status_code=status.HTTP_201_CREATED)
-async def create_article(
-        data: ArticleCreate = Depends(ArticleCreate.as_form),
-        db: AsyncSession = Depends(get_async_session),
-        current_user: User = Depends(get_current_user),
-        image: Optional[UploadFile] = File(default=None),
+@router.get("/", response_model=Page[ArticleRead])
+async def list_articles(
+    search: Optional[str] = Query(None),
+    category_id: Optional[int] = Query(None),
+    page_number: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_async_session),
 ):
     """
-    Create a new article.
+    Список статей (только для авторизованных).
+    """
+    logger.info(
+        f"Listing articles: search={search}, category_id={category_id}, "
+        f"page_number={page_number}, page_size={page_size}"
+    )
+    data = await ArticleService.list_articles(db, search, category_id, page_number, page_size)
+    items = []
+    for art in data["items"]:
+        url = await get_image_url(art.image_key)
+        art_read = ArticleRead.model_validate(art)
+        items.append(art_read.model_copy(update={"image_url": url}))
+    logger.debug(f"Retrieved {len(items)} articles")
+    return Page[ArticleRead](items=items, meta=data["meta"])
 
-    - **data**: Article data (title, content, category_id)
-    - **image**: Optional image file upload
+
+@router.get("/{article_id}", response_model=ArticleRead)
+async def get_article(
+    article_id: int,
+    db: AsyncSession = Depends(get_async_session),
+):
+    """
+    Получить статью по ID (только для авторизованных).
+    """
+    logger.info(f"Fetching article: article_id={article_id}")
+    art = await ArticleService.get_article(db, article_id)
+    if not art:
+        logger.warning(f"Article not found: article_id={article_id}")
+        raise HTTPException(status_code=404, detail="Статья не найдена")
+    art_read = ArticleRead.model_validate(art)
+    image_url = await get_image_url(art.image_key) if art.image_key else None
+    return art_read.model_copy(update={"image_url": image_url})
+
+
+@router.post("/", response_model=ArticleRead, status_code=status.HTTP_201_CREATED)
+async def create_article(
+    data: ArticleCreate = Depends(ArticleCreate.as_form),
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
+    image: Optional[UploadFile] = File(default=None),
+):
+    """
+    Создать новую статью (только авторизованный пользователь).
     """
     try:
         result = await db.execute(select(Category).where(Category.id == data.category_id))
@@ -64,85 +103,18 @@ async def create_article(
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                     detail=f"Failed to upload image: {e!s}")
 
-        try:
-            logger.debug(f"Calling ArticleService.create_article with image_key={image_key}")
-            article = await ArticleService.create_article(
-                db, data.title, data.content, data.category_id, current_user.id, image_key
-            )
-            logger.info(f"Article created: id={article.id}")
-        except ValueError as e:
-            if image_key:
-                logger.debug(f"Rolling back image upload: image_key={image_key}")
-                await delete_image(image_key)
-            logger.error(f"Article creation failed: {e!s}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        except Exception as e:
-            if image_key:
-                logger.debug(f"Rolling back image upload: image_key={image_key}")
-                await delete_image(image_key)
-            logger.error(f"Unexpected error in article creation: {e!s}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail=f"Failed to create article: {e!s}")
+        article = await ArticleService.create_article(
+            db, data.title, data.content, data.category_id, current_user.id, image_key
+        )
+        logger.info(f"Article created: id={article.id}")
 
         image_url = await get_image_url(image_key) if image_key else None
-        logger.debug(f"Image URL generated: {image_url}")
-        data = ArticleRead.model_validate(article).model_copy(update={"image_url": image_url})
-        return data
+        return ArticleRead.model_validate(article).model_copy(update={"image_url": image_url})
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected error in create_article: {e!s}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
-
-
-@router.get("/", response_model=Page[ArticleRead])
-async def list_articles(
-        search: Optional[str] = Query(None),
-        category_id: Optional[int] = Query(None),
-        page_number: int = Query(1, ge=1),
-        page_size: int = Query(10, ge=1, le=50),
-        db: AsyncSession = Depends(get_async_session),
-):
-    """
-    List articles with optional search and category filter.
-
-    - **search**: Optional search query for full-text search
-    - **category_id**: Optional category filter
-    - **page_number**: Page number (min 1)
-    - **page_size**: Items per page (1 to 50)
-    """
-    logger.info(
-        f"Listing articles: search={search}, category_id={category_id}, "
-        f"page_number={page_number}, page_size={page_size}"
-    )
-    data = await ArticleService.list_articles(db, search, category_id, page_number, page_size)
-    items = []
-    for art in data["items"]:
-        url = await get_image_url(art.image_key)
-        art_read = ArticleRead.model_validate(art)
-        items.append(art_read.model_copy(update={"image_url": url}))
-    logger.debug(f"Retrieved {len(items)} articles")
-    return Page[ArticleRead](items=items, meta=data["meta"])
-
-
-@router.get("/{article_id}", response_model=ArticleRead)
-async def get_article(
-        article_id: int,
-        db: AsyncSession = Depends(get_async_session)
-):
-    """
-    Get a specific article by ID.
-
-    - **article_id**: ID of the article
-    """
-    logger.info(f"Fetching article: article_id={article_id}")
-    art = await ArticleService.get_article(db, article_id)
-    if not art:
-        logger.warning(f"Article not found: article_id={article_id}")
-        raise HTTPException(status_code=404, detail="Статья не найдена")
-    art_read = ArticleRead.model_validate(art)
-    image_url = await get_image_url(art.image_key) if art.image_key else None
-    return art_read.model_copy(update={"image_url": image_url})
 
 
 @router.put("/{article_id}", response_model=ArticleRead)
@@ -156,23 +128,28 @@ async def update_article(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Update an article (multipart/form-data).
-    You can update any field or upload a new image.
+    Обновить статью (только автор).
     """
     logger.info(f"Updating article: article_id={article_id}")
-
     art = await ArticleService.get_article(db, article_id)
     if not art:
         raise HTTPException(status_code=404, detail="Статья не найдена")
     if art.author_id != current_user.id:
+        logger.warning(f"Unauthorized update attempt: article_id={article_id}, user_id={current_user.id}")
         raise HTTPException(status_code=403, detail="Not authorized to modify this article")
 
     update_data = {}
+
     if title is not None:
         update_data["title"] = title
     if content is not None:
         update_data["content"] = content
     if category_id is not None:
+        result = await db.execute(select(Category).where(Category.id == category_id))
+        category = result.scalar_one_or_none()
+        if not category:
+            logger.warning(f"Category not found: category_id={category_id}")
+            raise HTTPException(status_code=400, detail="Category not found")
         update_data["category_id"] = category_id
 
     if not update_data and not image:
@@ -190,52 +167,73 @@ async def update_article(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Image upload failed: {e!s}")
 
-    try:
-        updated_art = await ArticleService.update_article(db, article_id, **update_data)
-        image_url = await get_image_url(updated_art.image_key) if updated_art.image_key else None
-        return ArticleRead.model_validate(updated_art).model_copy(update={"image_url": image_url})
-    except Exception as e:
-        if "image_key" in update_data:
-            await delete_image(update_data["image_key"])
-        raise HTTPException(status_code=400, detail=f"Failed to update article: {e!s}")
+    updated_art = await ArticleService.update_article(db, article_id, **update_data)
+    image_url = await get_image_url(updated_art.image_key) if updated_art.image_key else None
+    return ArticleRead.model_validate(updated_art).model_copy(update={"image_url": image_url})
+
 
 @router.delete("/{article_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_article(
-        article_id: int,
-        db: AsyncSession = Depends(get_async_session),
-        current_user: User = Depends(get_current_user),
+    article_id: int,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Delete an article (soft delete).
-
-    - **article_id**: ID of the article
+    Удалить статью (soft delete, только автор).
     """
-    try:
-        logger.info(f"Deleting article: article_id={article_id}")
-        article = await ArticleService.get_article(db, article_id)
-        if not article:
-            logger.warning(f"Article not found: article_id={article_id}")
-            raise HTTPException(status_code=404, detail="Статья не найдена")
-        if article.author_id != current_user.id:
-            logger.warning(f"Unauthorized delete attempt: article_id={article_id}, user_id={current_user.id}")
-            raise HTTPException(status_code=403, detail="Not authorized to delete this article")
+    logger.info(f"Deleting article: article_id={article_id}")
+    article = await ArticleService.get_article(db, article_id)
+    if not article:
+        logger.warning(f"Article not found: article_id={article_id}")
+        raise HTTPException(status_code=404, detail="Статья не найдена")
+    if article.author_id != current_user.id:
+        logger.warning(f"Unauthorized delete attempt: article_id={article_id}, user_id={current_user.id}")
+        raise HTTPException(status_code=403, detail="Not authorized to delete this article")
 
-        if article.image_key:
-            try:
-                logger.debug(f"Deleting image: image_key={article.image_key}")
-                await delete_image(article.image_key)
-            except Exception as e:
-                logger.warning(f"Failed to delete image {article.image_key}: {e!s}")
+    if article.image_key:
+        try:
+            logger.debug(f"Deleting image: image_key={article.image_key}")
+            await delete_image(article.image_key)
+        except Exception as e:
+            logger.warning(f"Failed to delete image {article.image_key}: {e!s}")
 
-        success = await ArticleService.delete_article(db, article_id)
-        if not success:
-            logger.warning(f"Article deletion failed: article_id={article_id}")
-            raise HTTPException(status_code=400, detail="Failed to delete article")
-        logger.info(f"Article deleted: id={article_id}")
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error in delete_article: {e!s}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to delete article: {e!s}")
+    success = await ArticleService.delete_article(db, article_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to delete article")
+
+    logger.info(f"Article deleted: id={article_id}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/deleted", response_model=list[ArticleRead])
+async def list_deleted_articles(
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Получить список удалённых статей (только свои).
+    """
+    logger.info(f"Listing deleted articles for user_id={current_user.id}")
+    articles = await ArticleService.list_deleted_articles(db, current_user.id)
+    result = []
+    for art in articles:
+        url = await get_image_url(art.image_key)
+        result.append(ArticleRead.model_validate(art).model_copy(update={"image_url": url}))
+    return result
+
+
+@router.post("/{article_id}/restore", response_model=ArticleRead)
+async def restore_article(
+    article_id: int,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Восстановить удалённую статью (только автор).
+    """
+    logger.info(f"Restoring article: article_id={article_id}, user_id={current_user.id}")
+    article = await ArticleService.restore_article(db, article_id, current_user.id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Статья не найдена или недоступна")
+    url = await get_image_url(article.image_key)
+    return ArticleRead.model_validate(article).model_copy(update={"image_url": url})

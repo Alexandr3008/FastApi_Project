@@ -8,3 +8,4 @@ poetry.lock
 migration/
 alembic/versions/
 logs/
+tests/alembic/versions/
