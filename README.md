@@ -15,7 +15,7 @@ alembic -c alembic.ini upgrade head
 Запуск тестов
 В файле alembic.ini изменить sqlalchemy.url на тестовый
 Выполнить миграции Alembic
-alembic -c tests/alembic/revision --autogenerate -m "initial tables"
+alembic -c tests/alembic.ini revision --autogenerate -m "initial tables"
 Вставить в файл миграции в папке tests/alembic/versions, в функцию upgrade следующее:
 op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
 Выполнить миграции Alembic
