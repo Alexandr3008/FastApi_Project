@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+.pytest_cache/
+.idea
+poetry.lock
+migration/
+alembic/versions/
+logs/
+tests/alembic/versions/

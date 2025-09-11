@@ -1,0 +1,32 @@
+version: '3.9'
+
+services:
+  db_test:
+    image: postgres:16-alpine
+    container_name: test_postgres
+    environment:
+      POSTGRES_DB: test_db
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - test_pg_data:/var/lib/postgresql/data
+
+
+  minio_test:
+    image: minio/minio
+    container_name: test_minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9001:9001"
+    environment:
+      MINIO_ACCESS_KEY: testminio
+      MINIO_SECRET_KEY: testminio123
+    volumes:
+      - test_minio_data:/data
+
+
+volumes:
+  test_pg_data:
+  test_minio_data:
